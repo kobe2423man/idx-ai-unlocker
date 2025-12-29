@@ -20,15 +20,3 @@
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/main/install.sh | tr -d '\r')
-
-### 再次显示节点
-
-若需要重新显示节点，请使用以下命令：
-
-```bash
-cd ~/idx-final-node && \
-UUID=$(grep 'id' config.json | awk -F '"' '{print $4}' | tr -d '\r\n') && \
-HOST=$(grep -oE '[a-z0-9-]+\.trycloudflare\.com' argo.log | tail -n 1 | tr -d '\r\n') && \
-echo -n "vmess://" && \
-echo -n "{\"v\":\"2\",\"ps\":\"IDX-Rescue\",\"add\":\"$HOST\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$HOST\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$HOST\"}" | base64 -w 0 && \
-echo ""
