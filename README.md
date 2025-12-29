@@ -19,4 +19,4 @@
 打开 Project IDX 的终端（Terminal），复制并运行以下命令：
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/refs/heads/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/main/install.sh | tr -d '\r')
