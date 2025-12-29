@@ -16,3 +16,18 @@
 
 ```bash
 bash <(curl -Ls [https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/refs/heads/main/install.sh](https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/refs/heads/main/install.sh))
+客户端连接说明
+脚本运行结束后，会生成以 vmess:// 开头的链接：
+
+复制链接。
+
+打开客户端 (v2rayN / Shadowrocket / Clash 等)。
+
+导入剪贴板中的节点。
+
+直接连接 (无需手动修改地址或 SNI，脚本已全自动处理)。
+
+注意：如果手机端连接后无法访问 Google，请尝试在小火箭中【断开】并重新连接一次。
+
+⚠️ 免责声明
+本项目仅供技术研究与交流使用，请勿用于非法用途。
