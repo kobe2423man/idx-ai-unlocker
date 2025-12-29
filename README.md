@@ -1,7 +1,7 @@
 # 🚀 Project IDX AI Unlocker
 
-专为 **Google Project IDX** 环境设计的一键修复脚本。  
-只需一行命令，即可自动部署 Cloudflare Argo 隧道，完美解锁 **ChatGPT**、**Gemini**，并修复手机端 Shadowrocket 连接 Google 失败的问题。
+专为 **Google Project IDX** 环境设计的一键脚本。  
+只需一行命令，即可自动部署 Cloudflare Argo 隧道，完美解锁 **ChatGPT**、**Gemini**，并修复手机端 Shadowrocket 连接 AI 失败的问题。
 
 ---
 
