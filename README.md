@@ -1,18 +1,18 @@
-# 🚀 Project IDX AI Unlocker (All-in-One)
+# 🚀 Project IDX AI Unlocker
 
-这是一个专为 **Google Project IDX** 环境设计的一键修复脚本。
-它可以帮你自动部署节点，并完美解锁 **ChatGPT** 和 **Gemini** (解决地区限制)。
+这是一个专为 **Google Project IDX** 环境设计的全能修复脚本。
+一键解决 IDX 无法访问 **ChatGPT** / **Gemini** 的问题，并完美修复手机端 Shadowrocket 连接 Google 失败的痛点。
 
-## ✨ 功能特点
-- ✅ **全自动**：无需手动寻找域名，自动配置 Cloudflare Argo 隧道。
-- ✅ **AI 解锁**：集成 WARP，完美解锁 ChatGPT / OpenAI。
-- ✅ **Gemini 修复**：解决 `gemini.google.com` 地区不可用/打不开的问题。
-- ✅ **手机端优化**：服务端强制屏蔽 UDP，完美修复 **Shadowrocket (小火箭)** 无法连接 Google 的问题。
-- ✅ **防风控**：全量 Google 流量走 WARP，防止账号跳 IP 被封。
+## ✨ 核心功能
+- 🌍 **免域名配置**：自动集成 Cloudflare Argo 隧道，无需手动设置域名/SNI。
+- 🔓 **AI 全解锁**：集成 WARP，完美解锁 ChatGPT、OpenAI、Gemini (解除地区限制)。
+- 📱 **手机端修复**：服务端强制屏蔽 UDP，彻底解决 iOS/Shadowrocket 连不上 Google 的问题。
+- 🛡️ **防风控**：全量 Google 流量走 WARP，防止账号因 IP 跳变被封。
+- ⚡ **自动维护**：内置 MTU 修正与守护进程。
 
 ## 🛠 使用方法 (Usage)
 
-在你的 Project IDX 终端 (Terminal) 中，直接复制并运行以下命令：
+打开 Project IDX 的终端 (Terminal)，复制并运行以下命令即可：
 
 ```bash
-bash <(curl -Ls [https://raw.githubusercontent.com/你的用户名/仓库名/main/install.sh](https://raw.githubusercontent.com/你的用户名/仓库名/main/install.sh))
+bash <(curl -Ls [https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/refs/heads/main/install.sh](https://raw.githubusercontent.com/kobe2423man/idx-ai-unlocker/refs/heads/main/install.sh))
