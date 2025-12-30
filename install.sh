@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================
-#   Project IDX - 终极修复版 (Fixed for IDX Container)
-#   功能：免域名 + AI解锁 + 修复 Systemd 报错 + 完美重启恢复
-#   机制：利用 Shell 钩子实现环境启动即自动拉起节点
+#   Project IDX - 终极纯净版 (Clean Version)
+#   功能：免域名 + AI解锁 + 固定隧道 + 零报错静默自启
+#   修复：彻底移除不支持的 Systemd，改用 Shell 钩子
 # =================================================================
 
 # --- 1. 初始化环境与持久化配置 ---
@@ -35,6 +35,8 @@ echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
 rm -f config.json argo.log
+# 清理之前可能产生的错误服务文件
+rm -rf "$HOME/.config/systemd/user/idx-node.service"
 
 # --- 2. 下载核心组件 ---
 echo -e "${YELLOW}>>> [2/7] 检查并下载核心组件...${NC}"
@@ -125,7 +127,7 @@ echo "export UUID=\"$UUID\"" > "$CONFIG_FILE"
 echo "export FIXED_TOKEN=\"$FIXED_TOKEN\"" >> "$CONFIG_FILE"
 echo "export FIXED_DOMAIN=\"$FIXED_DOMAIN\"" >> "$CONFIG_FILE"
 
-# --- 6. 生成启动脚本与静默自启逻辑 ---
+# --- 6. 生成启动脚本与配置静默自启 ---
 echo -e "${YELLOW}>>> [6/7] 配置环境自启 (Project IDX 专用)...${NC}"
 
 cat <<EOF > startup.sh
@@ -185,7 +187,7 @@ VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-AI-${ARGO_DOMAIN}\",\"add\":\"$ARGO_DOMAIN
 VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
 
 echo -e "\n=================================================="
-echo -e "${GREEN}🎉 部署完成！(已修复 Systemd 报错)${NC}"
+echo -e "${GREEN}🎉 部署完成！(纯净无报错版)${NC}"
 echo -e "=================================================="
 echo -e "🌍 域名: ${GREEN}$ARGO_DOMAIN${NC}"
 echo -e "🔑 UUID: $UUID"
