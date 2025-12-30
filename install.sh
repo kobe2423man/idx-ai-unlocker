@@ -2,15 +2,14 @@
 # =================================================================
 #   Project IDX - 终极完美版 (Final Version)
 #   功能：免域名 + AI解锁 + 手机端强制TCP修复 + 登录防风控
-#   更新：支持选择固定 Cloudflare Tunnel
+#   更新：支持固定隧道 + 重启自动恢复 (Keep Alive)
 # =================================================================
 
-# --- 1. 初始化环境 ---
+# --- 1. 初始化环境与持久化配置 ---
 export WORKDIR="$HOME/idx-final-node"
-export UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+CONFIG_FILE="$WORKDIR/.env"
 
 mkdir -p "$WORKDIR"
-cd "$WORKDIR"
 
 # 颜色
 GREEN='\033[0;32m'
@@ -18,12 +17,25 @@ YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# 检查是否已存在配置，存在则读取（保持 UUID 不变）
+if [ -f "$CONFIG_FILE" ]; then
+    echo -e "${YELLOW}>>> 检测到历史配置，正在恢复 UUID 和设置...${NC}"
+    source "$CONFIG_FILE"
+fi
+
+# 如果没有 UUID (第一次安装)，则生成
+if [ -z "$UUID" ]; then
+    export UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+fi
+
+cd "$WORKDIR"
+
 echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
 rm -f config.json argo.log
 
-# --- 2. 下载核心组件 (Xray, WGCF, Cloudflared) ---
+# --- 2. 下载核心组件 ---
 echo -e "${YELLOW}>>> [2/7] 检查并下载核心组件...${NC}"
 download() {
     if [ ! -f "$1" ]; then
@@ -40,7 +52,7 @@ download "cloudflared" "https://github.com/cloudflare/cloudflared/releases/lates
 
 chmod +x xray
 
-# --- 3. 注册 WARP (解锁 AI 的关键) ---
+# --- 3. 注册 WARP ---
 echo -e "${YELLOW}>>> [3/7] 正在配置 WARP 密钥...${NC}"
 if [ ! -f "wgcf-account.toml" ]; then
     yes | ./wgcf register > /dev/null 2>&1
@@ -51,13 +63,11 @@ W_KEY=$(grep 'PrivateKey' wgcf-profile.conf | cut -d' ' -f3)
 W_ADDR=$(grep 'Address' wgcf-profile.conf | grep ':' | cut -d' ' -f3)
 
 if [ -z "$W_KEY" ]; then
-    echo -e "${RED}❌ 致命错误：WARP 注册失败。Google 可能会封锁注册接口。${NC}"
-    echo "建议稍后重试，或检查 IDX 网络。"
-    exit 1
+    echo -e "${RED}❌ 致命错误：WARP 注册失败。${NC}"; exit 1
 fi
 
-# --- 4. 生成终极配置 (集成所有修复补丁) ---
-echo -e "${YELLOW}>>> [4/7] 写入终极配置文件 (强制TCP + MTU修复)...${NC}"
+# --- 4. 写入 Xray 配置 ---
+echo -e "${YELLOW}>>> [4/7] 写入配置文件...${NC}"
 cat <<EOF > config.json
 {
   "log": { "loglevel": "warning" },
@@ -66,89 +76,98 @@ cat <<EOF > config.json
       "port": 8080, "listen": "127.0.0.1",
       "protocol": "vmess",
       "settings": { "clients": [ { "id": "$UUID" } ] },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": { "path": "/argo" }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"],
-        "metadataOnly": false
-      }
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/argo" } },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"], "metadataOnly": false }
     }
   ],
   "outbounds": [
     { "tag": "direct", "protocol": "freedom" },
     { "tag": "block", "protocol": "blackhole" },
     {
-      "tag": "warp",
-      "protocol": "wireguard",
+      "tag": "warp", "protocol": "wireguard",
       "settings": {
         "secretKey": "$W_KEY",
         "peers": [ { "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "endpoint": "162.159.192.1:2408" } ],
-        "address": [ "$W_ADDR" ],
-        "kernelMode": false,
-        "mtu": 1280
+        "address": [ "$W_ADDR" ], "mtu": 1280
       }
     }
   ],
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-      {
-        "type": "field",
-        "network": "udp",
-        "domain": ["google", "youtube", "gemini", "gstatic", "googleapis", "googlevideo"],
-        "outboundTag": "block"
-      },
-      {
-        "type": "field",
-        "domain": [
-          "openai", "chatgpt", "ai.com", "auth0",
-          "google", "youtube", "gemini", "bard", "gstatic", "googleapis", "googlevideo", "android", "appspot", "accounts.google.com"
-        ],
-        "outboundTag": "warp"
-      },
+      { "type": "field", "network": "udp", "domain": ["google", "youtube", "gemini"], "outboundTag": "block" },
+      { "type": "field", "domain": ["openai", "chatgpt", "google", "youtube", "gemini"], "outboundTag": "warp" },
       { "type": "field", "outboundTag": "direct", "network": "udp,tcp" }
     ]
   }
 }
 EOF
 
-# --- 5. 选择隧道模式 (新增功能) ---
+# --- 5. 选择隧道模式 (保存配置到 .env) ---
 echo -e "${YELLOW}>>> [5/7] 隧道配置...${NC}"
-read -p "是否使用固定 Cloudflare Tunnel Token? [y/n] (默认n): " USE_FIXED
-FIXED_TOKEN=""
-FIXED_DOMAIN=""
 
-if [[ "${USE_FIXED,,}" == "y" ]]; then
-    echo -e "\n请在下方粘贴您的 Tunnel Token (eyBg...):"
-    read -r FIXED_TOKEN
-    echo -e "请输入该 Tunnel 绑定的域名 (例如 ai.mydomain.com):"
-    read -r FIXED_DOMAIN
-    
-    if [ -z "$FIXED_TOKEN" ] || [ -z "$FIXED_DOMAIN" ]; then
-        echo -e "${RED}❌ Token 或域名为空，将自动切换回临时隧道模式。${NC}"
+# 只有当变量为空时才询问（避免每次运行都问）
+if [ -z "$FIXED_TOKEN" ]; then
+    read -p "是否使用固定 Cloudflare Tunnel Token? [y/n] (默认n): " USE_FIXED
+    if [[ "${USE_FIXED,,}" == "y" ]]; then
+        echo -e "\n请在下方粘贴您的 Tunnel Token:"
+        read -r FIXED_TOKEN
+        echo -e "请输入该 Tunnel 绑定的域名:"
+        read -r FIXED_DOMAIN
+    else
         FIXED_TOKEN=""
+        FIXED_DOMAIN=""
     fi
 fi
 
-# --- 6. 启动服务 ---
-echo -e "${YELLOW}>>> [6/7] 启动 Xray 和 隧道...${NC}"
+# 保存配置到 .env 文件，供重启后使用
+echo "export UUID=\"$UUID\"" > "$CONFIG_FILE"
+echo "export FIXED_TOKEN=\"$FIXED_TOKEN\"" >> "$CONFIG_FILE"
+echo "export FIXED_DOMAIN=\"$FIXED_DOMAIN\"" >> "$CONFIG_FILE"
+
+# --- 6. 生成开机自启脚本 ---
+cat <<EOF > startup.sh
+#!/bin/bash
+export WORKDIR="\$HOME/idx-final-node"
+cd "\$WORKDIR"
+if [ -f ".env" ]; then source ".env"; fi
+
+# 检查进程是否已运行
+if pgrep -x "xray" > /dev/null && pgrep -f "cloudflared tunnel" > /dev/null; then
+    # 已经在运行，不重复启动
+    exit 0
+fi
+
+echo ">>> 检测到 IDX 重启，正在自动恢复代理服务..."
+pkill -9 xray 2>/dev/null
+pkill -9 cloudflared 2>/dev/null
+
 nohup ./xray run -c config.json > /dev/null 2>&1 &
 sleep 2
-if ! pgrep -x "xray" > /dev/null; then echo -e "${RED}❌ Xray 启动失败！${NC}"; exit 1; fi
 
-# 启动隧道
-if [ -n "$FIXED_TOKEN" ]; then
-    echo -e "正在使用固定 Token 启动隧道..."
-    nohup ./cloudflared tunnel run --token "$FIXED_TOKEN" > argo.log 2>&1 &
-    ARGO_DOMAIN="$FIXED_DOMAIN"
+if [ -n "\$FIXED_TOKEN" ]; then
+    nohup ./cloudflared tunnel run --token "\$FIXED_TOKEN" > argo.log 2>&1 &
+    echo ">>> 固定隧道已恢复: \$FIXED_DOMAIN"
 else
-    echo -e "正在启动临时隧道..."
     nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
-    
-    echo -e "${YELLOW}>>> [7/7] 正在获取域名 (请等待 10 秒)...${NC}"
+    echo ">>> 临时隧道启动中..."
+fi
+EOF
+chmod +x startup.sh
+
+# 注入到 .bashrc 实现自启 (如果未注入过)
+if ! grep -q "idx-final-node/startup.sh" ~/.bashrc; then
+    echo "bash \$HOME/idx-final-node/startup.sh" >> ~/.bashrc
+fi
+
+# --- 7. 启动服务 ---
+echo -e "${YELLOW}>>> [6/7] 启动服务...${NC}"
+./startup.sh # 调用刚才生成的启动脚本运行
+
+# 等待获取临时域名（如果是临时模式）
+ARGO_DOMAIN="$FIXED_DOMAIN"
+if [ -z "$FIXED_TOKEN" ]; then
+    echo -e "${YELLOW}>>> [7/7] 正在获取临时域名...${NC}"
     for i in {1..10}; do
         sleep 2
         ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///')
@@ -157,25 +176,20 @@ else
     done
 fi
 
-echo ""
 if [ -z "$ARGO_DOMAIN" ]; then
-    echo -e "${RED}❌ 获取域名失败，请检查 Token 是否正确或重试。${NC}"; cat argo.log; exit 1
+    echo -e "${RED}❌ 启动失败或获取域名超时，请检查 argo.log${NC}"; exit 1
 fi
 
-# --- 7. 输出结果 ---
-VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-Final-AI\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
+# --- 8. 输出结果 ---
+VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-AI-${ARGO_DOMAIN}\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
 VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
 
 echo -e "\n=================================================="
-echo -e "${GREEN}🎉 部署完成！这是你的完美节点链接：${NC}"
+echo -e "${GREEN}🎉 部署完成！且已配置开机自启${NC}"
 echo -e "=================================================="
 echo -e "🌍 域名: ${GREEN}$ARGO_DOMAIN${NC}"
 echo -e "🔑 UUID: $UUID"
-echo -e "🛡️ 策略: \033[36mGoogle全系 + OpenAI -> 强制走WARP (TCP稳定版)\033[0m"
+echo -e "📌 说明: 即使重启 IDX 空间，只需打开终端，节点会自动复活。"
 echo -e "--------------------------------------------------"
 echo -e "${YELLOW}$VMESS_LINK${NC}"
 echo -e "--------------------------------------------------"
-echo -e "👉 复制上方 vmess 链接导入软件即可使用。"
-echo -e "⚠️ 导入后请务必 [断开] 之前的连接并重新连接！"
-echo -e "⚠️ 手机端无需特殊设置，直接导入即可解锁。"
-echo -e "=================================================="
