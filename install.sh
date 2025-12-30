@@ -1,8 +1,8 @@
 #!/bin/bash
 # =================================================================
-#   Project IDX - 终极完美版 (Final Version)
-#   功能：免域名 + AI解锁 + 手机端强制TCP修复 + 登录防风控
-#   更新：支持固定隧道 + 纯后台静默自启 (Systemd)
+#   Project IDX - 终极修复版 (Fixed for IDX Container)
+#   功能：免域名 + AI解锁 + 修复 Systemd 报错 + 完美重启恢复
+#   机制：利用 Shell 钩子实现环境启动即自动拉起节点
 # =================================================================
 
 # --- 1. 初始化环境与持久化配置 ---
@@ -30,16 +30,14 @@ fi
 
 cd "$WORKDIR"
 
-echo -e "${YELLOW}>>> [1/8] 正在清理旧进程与环境...${NC}"
-# 停止 systemd 服务（如果存在）
-systemctl --user stop idx-node 2>/dev/null
-systemctl --user disable idx-node 2>/dev/null
+echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
+# 彻底清理旧的进程
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
 rm -f config.json argo.log
 
 # --- 2. 下载核心组件 ---
-echo -e "${YELLOW}>>> [2/8] 检查并下载核心组件...${NC}"
+echo -e "${YELLOW}>>> [2/7] 检查并下载核心组件...${NC}"
 download() {
     if [ ! -f "$1" ]; then
         echo "正在下载 $1 ..."
@@ -56,7 +54,7 @@ download "cloudflared" "https://github.com/cloudflare/cloudflared/releases/lates
 chmod +x xray
 
 # --- 3. 注册 WARP ---
-echo -e "${YELLOW}>>> [3/8] 正在配置 WARP 密钥...${NC}"
+echo -e "${YELLOW}>>> [3/7] 正在配置 WARP 密钥...${NC}"
 if [ ! -f "wgcf-account.toml" ]; then
     yes | ./wgcf register > /dev/null 2>&1
     ./wgcf generate > /dev/null 2>&1
@@ -70,7 +68,7 @@ if [ -z "$W_KEY" ]; then
 fi
 
 # --- 4. 写入 Xray 配置 ---
-echo -e "${YELLOW}>>> [4/8] 写入配置文件...${NC}"
+echo -e "${YELLOW}>>> [4/7] 写入配置文件...${NC}"
 cat <<EOF > config.json
 {
   "log": { "loglevel": "warning" },
@@ -107,7 +105,7 @@ cat <<EOF > config.json
 EOF
 
 # --- 5. 选择隧道模式 (保存配置到 .env) ---
-echo -e "${YELLOW}>>> [5/8] 隧道配置...${NC}"
+echo -e "${YELLOW}>>> [5/7] 隧道配置...${NC}"
 
 if [ -z "$FIXED_TOKEN" ]; then
     read -p "是否使用固定 Cloudflare Tunnel Token? [y/n] (默认n): " USE_FIXED
@@ -127,66 +125,44 @@ echo "export UUID=\"$UUID\"" > "$CONFIG_FILE"
 echo "export FIXED_TOKEN=\"$FIXED_TOKEN\"" >> "$CONFIG_FILE"
 echo "export FIXED_DOMAIN=\"$FIXED_DOMAIN\"" >> "$CONFIG_FILE"
 
-# --- 6. 生成启动脚本 (Startup Script) ---
+# --- 6. 生成启动脚本与静默自启逻辑 ---
+echo -e "${YELLOW}>>> [6/7] 配置环境自启 (Project IDX 专用)...${NC}"
+
 cat <<EOF > startup.sh
 #!/bin/bash
 export WORKDIR="$HOME/idx-final-node"
 cd "\$WORKDIR"
 if [ -f ".env" ]; then source ".env"; fi
 
-# 检查是否重复运行
+# 检查进程是否已运行 (防止重复启动)
 if pgrep -x "xray" > /dev/null && pgrep -f "cloudflared tunnel" > /dev/null; then
     exit 0
 fi
 
 # 启动 Xray
-./xray run -c config.json > /dev/null 2>&1 &
+nohup ./xray run -c config.json > /dev/null 2>&1 &
 sleep 2
 
 # 启动 Tunnel
 if [ -n "\$FIXED_TOKEN" ]; then
-    ./cloudflared tunnel run --token "\$FIXED_TOKEN" > argo.log 2>&1 &
+    nohup ./cloudflared tunnel run --token "\$FIXED_TOKEN" > argo.log 2>&1 &
 else
-    ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
+    nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
 fi
 EOF
 chmod +x startup.sh
 
-# --- 7. 配置 Systemd 开机自启 (关键步骤) ---
-echo -e "${YELLOW}>>> [6/8] 配置后台自动服务 (Systemd)...${NC}"
-mkdir -p "$HOME/.config/systemd/user"
-cat <<EOF > "$HOME/.config/systemd/user/idx-node.service"
-[Unit]
-Description=IDX AI Unlocker Service
-After=network.target
-
-[Service]
-Type=forking
-ExecStart=$HOME/idx-final-node/startup.sh
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-EOF
-
-# 启用服务
-systemctl --user daemon-reload
-systemctl --user enable idx-node > /dev/null 2>&1
-systemctl --user start idx-node > /dev/null 2>&1
-
-# 只有当 Systemd 失败时，才注入 .bashrc 作为备用
-if ! systemctl --user is-active --quiet idx-node; then
-    echo -e "${RED}⚠️ Systemd 启动异常，切换回终端自启模式...${NC}"
-    if ! grep -q "idx-final-node/startup.sh" ~/.bashrc; then
-        echo "bash \$HOME/idx-final-node/startup.sh" >> ~/.bashrc
-    fi
-else 
-    echo -e "${GREEN}✅ Systemd 服务配置成功！空间启动即自动运行。${NC}"
+# 注入到 .bashrc 实现 IDX 环境加载时自动运行
+# 注意：IDX 的终端初始化会自动执行 .bashrc，这是最稳妥的自启方式
+if ! grep -q "idx-final-node/startup.sh" ~/.bashrc; then
+    echo "bash \$HOME/idx-final-node/startup.sh" >> ~/.bashrc
 fi
 
-# --- 8. 等待并验证 ---
-echo -e "${YELLOW}>>> [7/8] 正在验证服务状态...${NC}"
+# 立即运行一次
+./startup.sh
+
+# --- 7. 等待并验证 ---
+echo -e "${YELLOW}>>> [7/7] 正在验证服务状态...${NC}"
 sleep 3
 ARGO_DOMAIN="$FIXED_DOMAIN"
 
@@ -204,17 +180,16 @@ if [ -z "$ARGO_DOMAIN" ]; then
     echo -e "${RED}❌ 获取域名失败或服务未启动，请检查 Token。${NC}"; exit 1
 fi
 
-# --- 9. 输出结果 ---
+# --- 8. 输出结果 ---
 VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-AI-${ARGO_DOMAIN}\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
 VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
 
 echo -e "\n=================================================="
-echo -e "${GREEN}🎉 部署完成！${NC}"
+echo -e "${GREEN}🎉 部署完成！(已修复 Systemd 报错)${NC}"
 echo -e "=================================================="
 echo -e "🌍 域名: ${GREEN}$ARGO_DOMAIN${NC}"
 echo -e "🔑 UUID: $UUID"
-echo -e "⚡ 状态: \033[36m已配置后台静默启动${NC}"
-echo -e "📌 说明: 只要 IDX 空间是 Running 状态，节点即可连接 (无需打开网页终端)"
+echo -e "⚡ 状态: \033[36m已配置环境自启 (打开 Workspace 即生效)${NC}"
 echo -e "--------------------------------------------------"
 echo -e "${YELLOW}$VMESS_LINK${NC}"
 echo -e "--------------------------------------------------"
