@@ -1,13 +1,14 @@
 #!/bin/bash
-
 # =================================================================
 #   Project IDX - 终极完美版 (Final Version)
 #   功能：免域名 + AI解锁 + 手机端强制TCP修复 + 登录防风控
+#   更新：支持选择固定 Cloudflare Tunnel
 # =================================================================
 
 # --- 1. 初始化环境 ---
 export WORKDIR="$HOME/idx-final-node"
 export UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
@@ -17,14 +18,13 @@ YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${YELLOW}>>> [1/6] 正在清理旧进程与环境...${NC}"
+echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
 rm -f config.json argo.log
 
 # --- 2. 下载核心组件 (Xray, WGCF, Cloudflared) ---
-echo -e "${YELLOW}>>> [2/6] 检查并下载核心组件...${NC}"
-
+echo -e "${YELLOW}>>> [2/7] 检查并下载核心组件...${NC}"
 download() {
     if [ ! -f "$1" ]; then
         echo "正在下载 $1 ..."
@@ -37,14 +37,16 @@ download() {
 download "xray.zip" "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip"
 download "wgcf" "https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64"
 download "cloudflared" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+
 chmod +x xray
 
 # --- 3. 注册 WARP (解锁 AI 的关键) ---
-echo -e "${YELLOW}>>> [3/6] 正在配置 WARP 密钥...${NC}"
+echo -e "${YELLOW}>>> [3/7] 正在配置 WARP 密钥...${NC}"
 if [ ! -f "wgcf-account.toml" ]; then
     yes | ./wgcf register > /dev/null 2>&1
     ./wgcf generate > /dev/null 2>&1
 fi
+
 W_KEY=$(grep 'PrivateKey' wgcf-profile.conf | cut -d' ' -f3)
 W_ADDR=$(grep 'Address' wgcf-profile.conf | grep ':' | cut -d' ' -f3)
 
@@ -55,8 +57,7 @@ if [ -z "$W_KEY" ]; then
 fi
 
 # --- 4. 生成终极配置 (集成所有修复补丁) ---
-echo -e "${YELLOW}>>> [4/6] 写入终极配置文件 (强制TCP + MTU修复)...${NC}"
-
+echo -e "${YELLOW}>>> [4/7] 写入终极配置文件 (强制TCP + MTU修复)...${NC}"
 cat <<EOF > config.json
 {
   "log": { "loglevel": "warning" },
@@ -114,29 +115,54 @@ cat <<EOF > config.json
 }
 EOF
 
-# --- 5. 启动服务 ---
-echo -e "${YELLOW}>>> [5/6] 启动 Xray 和 隧道...${NC}"
+# --- 5. 选择隧道模式 (新增功能) ---
+echo -e "${YELLOW}>>> [5/7] 隧道配置...${NC}"
+read -p "是否使用固定 Cloudflare Tunnel Token? [y/n] (默认n): " USE_FIXED
+FIXED_TOKEN=""
+FIXED_DOMAIN=""
+
+if [[ "${USE_FIXED,,}" == "y" ]]; then
+    echo -e "\n请在下方粘贴您的 Tunnel Token (eyBg...):"
+    read -r FIXED_TOKEN
+    echo -e "请输入该 Tunnel 绑定的域名 (例如 ai.mydomain.com):"
+    read -r FIXED_DOMAIN
+    
+    if [ -z "$FIXED_TOKEN" ] || [ -z "$FIXED_DOMAIN" ]; then
+        echo -e "${RED}❌ Token 或域名为空，将自动切换回临时隧道模式。${NC}"
+        FIXED_TOKEN=""
+    fi
+fi
+
+# --- 6. 启动服务 ---
+echo -e "${YELLOW}>>> [6/7] 启动 Xray 和 隧道...${NC}"
 nohup ./xray run -c config.json > /dev/null 2>&1 &
 sleep 2
 if ! pgrep -x "xray" > /dev/null; then echo -e "${RED}❌ Xray 启动失败！${NC}"; exit 1; fi
 
 # 启动隧道
-nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
-
-echo -e "${YELLOW}>>> [6/6] 正在获取域名 (请等待 10 秒)...${NC}"
-for i in {1..10}; do
-    sleep 2
-    ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///')
-    if [ ! -z "$ARGO_DOMAIN" ]; then break; fi
-    echo -n "."
-done
-echo ""
-
-if [ -z "$ARGO_DOMAIN" ]; then
-    echo -e "${RED}❌ 获取域名失败，请重试。${NC}"; cat argo.log; exit 1
+if [ -n "$FIXED_TOKEN" ]; then
+    echo -e "正在使用固定 Token 启动隧道..."
+    nohup ./cloudflared tunnel run --token "$FIXED_TOKEN" > argo.log 2>&1 &
+    ARGO_DOMAIN="$FIXED_DOMAIN"
+else
+    echo -e "正在启动临时隧道..."
+    nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
+    
+    echo -e "${YELLOW}>>> [7/7] 正在获取域名 (请等待 10 秒)...${NC}"
+    for i in {1..10}; do
+        sleep 2
+        ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///')
+        if [ ! -z "$ARGO_DOMAIN" ]; then break; fi
+        echo -n "."
+    done
 fi
 
-# --- 6. 输出结果 ---
+echo ""
+if [ -z "$ARGO_DOMAIN" ]; then
+    echo -e "${RED}❌ 获取域名失败，请检查 Token 是否正确或重试。${NC}"; cat argo.log; exit 1
+fi
+
+# --- 7. 输出结果 ---
 VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-Final-AI\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
 VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
 
@@ -149,7 +175,7 @@ echo -e "🛡️ 策略: \033[36mGoogle全系 + OpenAI -> 强制走WARP (TCP稳�
 echo -e "--------------------------------------------------"
 echo -e "${YELLOW}$VMESS_LINK${NC}"
 echo -e "--------------------------------------------------"
-echo -e "👉 复制上方 vmess:// 链接，导入软件即可使用。"
-echo -e "⚠️  导入后，请务必【断开】之前的连接，再重新连接！"
-echo -e "⚠️  手机端无需任何特殊设置，直接用即可解锁。"
+echo -e "👉 复制上方 vmess 链接导入软件即可使用。"
+echo -e "⚠️ 导入后请务必 [断开] 之前的连接并重新连接！"
+echo -e "⚠️ 手机端无需特殊设置，直接导入即可解锁。"
 echo -e "=================================================="
