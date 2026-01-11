@@ -1,8 +1,7 @@
 #!/bin/bash
 # =================================================================
-#   Project IDX - 终极纯净版 (Clean Version)
-#   功能：免域名 + AI解锁 + 固定隧道 + 零报错静默自启
-#   修复：彻底移除不支持的 Systemd，改用 Shell 钩子
+#   Project IDX - 终极纯净版 (Clean Version) + 自动保活 (Auto Keep-Alive)
+#   功能：免域名 + AI解锁 + 固定隧道 + 零报错静默自启 + 防休眠心跳
 # =================================================================
 
 # --- 1. 初始化环境与持久化配置 ---
@@ -34,6 +33,7 @@ echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
 # 彻底清理旧的进程
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
+pkill -f keepalive_loop 2>/dev/null
 rm -f config.json argo.log
 # 清理之前可能产生的错误服务文件
 rm -rf "$HOME/.config/systemd/user/idx-node.service"
@@ -127,8 +127,8 @@ echo "export UUID=\"$UUID\"" > "$CONFIG_FILE"
 echo "export FIXED_TOKEN=\"$FIXED_TOKEN\"" >> "$CONFIG_FILE"
 echo "export FIXED_DOMAIN=\"$FIXED_DOMAIN\"" >> "$CONFIG_FILE"
 
-# --- 6. 生成启动脚本与配置静默自启 ---
-echo -e "${YELLOW}>>> [6/7] 配置环境自启 (Project IDX 专用)...${NC}"
+# --- 6. 生成启动脚本与配置静默自启 (含保活机制) ---
+echo -e "${YELLOW}>>> [6/7] 配置环境自启与保活机制...${NC}"
 
 cat <<EOF > startup.sh
 #!/bin/bash
@@ -136,26 +136,54 @@ export WORKDIR="$HOME/idx-final-node"
 cd "\$WORKDIR"
 if [ -f ".env" ]; then source ".env"; fi
 
-# 检查进程是否已运行 (防止重复启动)
+# 1. 检查主进程 (防止重复)
 if pgrep -x "xray" > /dev/null && pgrep -f "cloudflared tunnel" > /dev/null; then
+    # 如果主进程在，检查保活进程是否在，不在则补
+    if ! pgrep -f "keepalive_loop" > /dev/null; then
+         nohup bash -c 'exec -a keepalive_loop bash -c "while true; do sleep 300; done"' > /dev/null 2>&1 &
+    fi
     exit 0
 fi
 
-# 启动 Xray
+# 2. 启动 Xray
 nohup ./xray run -c config.json > /dev/null 2>&1 &
 sleep 2
 
-# 启动 Tunnel
+# 3. 启动 Tunnel
 if [ -n "\$FIXED_TOKEN" ]; then
     nohup ./cloudflared tunnel run --token "\$FIXED_TOKEN" > argo.log 2>&1 &
 else
     nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
 fi
+
+# 4. 启动内置保活 (Keep-Alive Loop)
+# 功能：每5分钟访问一次节点域名，保持隧道活跃，防止 IDX 休眠
+nohup bash -c '
+    exec -a keepalive_loop bash
+    sleep 10
+    while true; do
+        # 获取当前域名 (优先固定，其次临时)
+        CURRENT_DOMAIN=""
+        if [ -n "$FIXED_DOMAIN" ]; then
+            CURRENT_DOMAIN="$FIXED_DOMAIN"
+        else
+            CURRENT_DOMAIN=\$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1)
+        fi
+
+        # 发送心跳请求
+        if [ -n "\$CURRENT_DOMAIN" ]; then
+            curl -s -I "\$CURRENT_DOMAIN/argo" > /dev/null 2>&1
+        fi
+        
+        # 5分钟一次
+        sleep 300
+    done
+' > /dev/null 2>&1 &
+
 EOF
 chmod +x startup.sh
 
 # 注入到 .bashrc 实现 IDX 环境加载时自动运行
-# 注意：IDX 的终端初始化会自动执行 .bashrc，这是最稳妥的自启方式
 if ! grep -q "idx-final-node/startup.sh" ~/.bashrc; then
     echo "bash \$HOME/idx-final-node/startup.sh" >> ~/.bashrc
 fi
@@ -170,6 +198,7 @@ ARGO_DOMAIN="$FIXED_DOMAIN"
 
 # 如果是临时模式，获取域名
 if [ -z "$FIXED_TOKEN" ]; then
+    echo "正在获取临时域名 (可能需要10-20秒)..."
     for i in {1..10}; do
         sleep 2
         ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///')
@@ -179,7 +208,7 @@ if [ -z "$FIXED_TOKEN" ]; then
 fi
 
 if [ -z "$ARGO_DOMAIN" ]; then
-    echo -e "${RED}❌ 获取域名失败或服务未启动，请检查 Token。${NC}"; exit 1
+    echo -e "${RED}❌ 获取域名失败或服务未启动，请检查 Token 或 Argo 日志。${NC}"; exit 1
 fi
 
 # --- 8. 输出结果 ---
@@ -187,11 +216,12 @@ VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-AI-${ARGO_DOMAIN}\",\"add\":\"$ARGO_DOMAIN
 VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
 
 echo -e "\n=================================================="
-echo -e "${GREEN}🎉 部署完成！(纯净无报错版)${NC}"
+echo -e "${GREEN}🎉 部署完成！(已集成自动保活)${NC}"
 echo -e "=================================================="
 echo -e "🌍 域名: ${GREEN}$ARGO_DOMAIN${NC}"
 echo -e "🔑 UUID: $UUID"
-echo -e "⚡ 状态: \033[36m已配置环境自启 (打开 Workspace 即生效)${NC}"
+echo -e "💓 保活: \033[36m已启动 (每5分钟自动访问一次隧道)${NC}"
+echo -e "⚡ 自启: \033[36m已写入 .bashrc${NC}"
 echo -e "--------------------------------------------------"
 echo -e "${YELLOW}$VMESS_LINK${NC}"
 echo -e "--------------------------------------------------"
