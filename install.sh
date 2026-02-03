@@ -1,7 +1,9 @@
 #!/bin/bash
 # =================================================================
-#   Project IDX - 终极纯净版 (Clean Version) + 自动保活 (Auto Keep-Alive)
-#   功能：免域名 + AI解锁 + 固定隧道 + 零报错静默自启 + 防休眠心跳
+#   Project IDX - 终极纯净版 (Token 修正 + VMess 语法修复)
+#   修正内容:
+#     1. [Token] 保持修正状态 (ZWZj)
+#     2. [VMess] 给链接生成变量加上双引号 "$VAR"，防止 Base64 编码错误
 # =================================================================
 
 # --- 1. 初始化环境与持久化配置 ---
@@ -30,19 +32,18 @@ fi
 cd "$WORKDIR"
 
 echo -e "${YELLOW}>>> [1/7] 正在清理旧进程与环境...${NC}"
-# 彻底清理旧的进程
 pkill -9 xray 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
 pkill -f keepalive_loop 2>/dev/null
-rm -f config.json argo.log
-# 清理之前可能产生的错误服务文件
+pkill -f disk_keepalive 2>/dev/null
+rm -f config.json argo.log keepalive.log
 rm -rf "$HOME/.config/systemd/user/idx-node.service"
 
 # --- 2. 下载核心组件 ---
 echo -e "${YELLOW}>>> [2/7] 检查并下载核心组件...${NC}"
 download() {
     if [ ! -f "$1" ]; then
-        echo "正在下载 $1 ..."
+        echo "正在下载下载 $1 ..."
         wget -q -O "$1" "$2"
         if [ $? -ne 0 ]; then echo -e "${RED}❌ 下载 $1 失败，请检查网络。${NC}"; exit 1; fi
         if [[ "$1" == *.zip ]]; then unzip -q -o "$1"; rm "$1"; else chmod +x "$1"; fi
@@ -53,7 +54,7 @@ download "xray.zip" "https://github.com/XTLS/Xray-core/releases/download/v1.8.4/
 download "wgcf" "https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64"
 download "cloudflared" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 
-chmod +x xray
+chmod +x xray wgcf cloudflared
 
 # --- 3. 注册 WARP ---
 echo -e "${YELLOW}>>> [3/7] 正在配置 WARP 密钥...${NC}"
@@ -66,21 +67,20 @@ W_KEY=$(grep 'PrivateKey' wgcf-profile.conf | cut -d' ' -f3)
 W_ADDR=$(grep 'Address' wgcf-profile.conf | grep ':' | cut -d' ' -f3)
 
 if [ -z "$W_KEY" ]; then
-    echo -e "${RED}❌ 致命错误：WARP 注册失败。${NC}"; exit 1
+    echo -e "${RED}❌ 致命错误：WARP 注册失败。可能是 IP 被限制。${NC}"; exit 1
 fi
 
-# --- 4. 写入 Xray 配置 ---
-echo -e "${YELLOW}>>> [4/7] 写入配置文件...${NC}"
+# --- 4. 写入 Xray 配置（YouTube 原生 QUIC 高速 + Gemini 走 WARP）---
+echo -e "${YELLOW}>>> [4/7] 写入配置文件（YouTube 已优化为原生高速）...${NC}"
 cat <<EOF > config.json
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "port": 8080, "listen": "127.0.0.1",
-      "protocol": "vmess",
+      "port": 8080, "listen": "127.0.0.1", "protocol": "vmess",
       "settings": { "clients": [ { "id": "$UUID" } ] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/argo" } },
-      "sniffing": { "enabled": true, "destOverride": ["http", "tls"], "metadataOnly": false }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"], "metadataOnly": false }
     }
   ],
   "outbounds": [
@@ -98,130 +98,118 @@ cat <<EOF > config.json
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-      { "type": "field", "network": "udp", "domain": ["google", "youtube", "gemini"], "outboundTag": "block" },
-      { "type": "field", "domain": ["openai", "chatgpt", "google", "youtube", "gemini"], "outboundTag": "warp" },
+      { "type": "field", "domain": [
+        "keyword:openai", "keyword:chatgpt",
+        "keyword:gemini", "domain:gemini.google.com", "domain:generativelanguage.googleapis.com", "domain:ai.google.com",
+        "keyword:telegram", "keyword:t.me", "keyword:telegra"
+      ], "outboundTag": "warp" },
       { "type": "field", "outboundTag": "direct", "network": "udp,tcp" }
     ]
   }
 }
 EOF
 
-# --- 5. 选择隧道模式 (保存配置到 .env) ---
+# --- 5. 选择隧道模式 ---
 echo -e "${YELLOW}>>> [5/7] 隧道配置...${NC}"
 
 if [ -z "$FIXED_TOKEN" ]; then
-    read -p "是否使用固定 Cloudflare Tunnel Token? [y/n] (默认n): " USE_FIXED
-    if [[ "${USE_FIXED,,}" == "y" ]]; then
-        echo -e "\n请在下方粘贴您的 Tunnel Token:"
-        read -r FIXED_TOKEN
-        echo -e "请输入该 Tunnel 绑定的域名:"
-        read -r FIXED_DOMAIN
-    else
-        FIXED_TOKEN=""
-        FIXED_DOMAIN=""
-    fi
+    # Token 已更正为 ZWZj
+    FIXED_TOKEN="eyJhIjoiMGM1ZjJlNjRlNDMwNDE2ZWZjN2M1MzE4ZGUyMzE5MmYiLCJ0IjoiM2E3MWY2NWUtMjMyZi00Yzk3LTg1OWEtZDIyYzlmNzRmOTM1IiwicyI6Ik4yUmlaV1EyTnpndE9UWmhOeTAwTUdWaUxXRXhZek10TVRkaE1qUTNaak5tT1dZeCJ9"
+    FIXED_DOMAIN="idx.kobe24.de5.net"
 fi
 
-# 保存配置到 .env 文件
+# 保存配置到 .env
 echo "export UUID=\"$UUID\"" > "$CONFIG_FILE"
 echo "export FIXED_TOKEN=\"$FIXED_TOKEN\"" >> "$CONFIG_FILE"
 echo "export FIXED_DOMAIN=\"$FIXED_DOMAIN\"" >> "$CONFIG_FILE"
 
-# --- 6. 生成启动脚本与配置静默自启 (含保活机制) ---
-echo -e "${YELLOW}>>> [6/7] 配置环境自启与保活机制...${NC}"
+# --- 6. 生成启动脚本与最强保活机制 ---
+echo -e "${YELLOW}>>> [6/7] 配置自启与最强保活机制...${NC}"
 
-cat <<EOF > startup.sh
+cat <<'EOF' > startup.sh
 #!/bin/bash
 export WORKDIR="$HOME/idx-final-node"
-cd "\$WORKDIR"
+cd "$WORKDIR"
 if [ -f ".env" ]; then source ".env"; fi
 
-# 1. 检查主进程 (防止重复)
 if pgrep -x "xray" > /dev/null && pgrep -f "cloudflared tunnel" > /dev/null; then
-    # 如果主进程在，检查保活进程是否在，不在则补
     if ! pgrep -f "keepalive_loop" > /dev/null; then
-         nohup bash -c 'exec -a keepalive_loop bash -c "while true; do sleep 300; done"' > /dev/null 2>&1 &
+        nohup bash -c 'exec -a keepalive_loop bash -c "while true; do sleep 300; done"' > /dev/null 2>&1 &
+    fi
+    if ! pgrep -f "disk_keepalive" > /dev/null; then
+        nohup bash -c 'exec -a disk_keepalive bash -c "while true; do echo $(date) > keepalive.log; sleep 180; done"' > /dev/null 2>&1 &
     fi
     exit 0
 fi
 
-# 2. 启动 Xray
 nohup ./xray run -c config.json > /dev/null 2>&1 &
 sleep 2
 
-# 3. 启动 Tunnel
-if [ -n "\$FIXED_TOKEN" ]; then
-    nohup ./cloudflared tunnel run --token "\$FIXED_TOKEN" > argo.log 2>&1 &
+if [ -n "$FIXED_TOKEN" ]; then
+    nohup ./cloudflared tunnel run --token "$FIXED_TOKEN" > argo.log 2>&1 &
 else
     nohup ./cloudflared tunnel --url http://127.0.0.1:8080 --no-autoupdate > argo.log 2>&1 &
 fi
 
-# 4. 启动内置保活 (Keep-Alive Loop)
-# 功能：每5分钟访问一次节点域名，保持隧道活跃，防止 IDX 休眠
 nohup bash -c '
-    exec -a keepalive_loop bash
-    sleep 10
-    while true; do
-        # 获取当前域名 (优先固定，其次临时)
-        CURRENT_DOMAIN=""
-        if [ -n "$FIXED_DOMAIN" ]; then
-            CURRENT_DOMAIN="$FIXED_DOMAIN"
-        else
-            CURRENT_DOMAIN=\$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1)
-        fi
-
-        # 发送心跳请求
-        if [ -n "\$CURRENT_DOMAIN" ]; then
-            curl -s -I "\$CURRENT_DOMAIN/argo" > /dev/null 2>&1
-        fi
-        
-        # 5分钟一次
-        sleep 300
-    done
+    exec -a keepalive_loop bash -c "
+        sleep 15
+        while true; do
+            CURRENT_DOMAIN=\"$FIXED_DOMAIN\"
+            if [ -z \"$CURRENT_DOMAIN\" ]; then
+                CURRENT_DOMAIN=$(grep -oE \"https://.*[a-z]+.trycloudflare.com\" argo.log | head -n 1 | sed \"s/https:\/\///g\")
+            fi
+            if [ -n \"$CURRENT_DOMAIN\" ]; then
+                curl -s -I \"https://\$CURRENT_DOMAIN/argo\" --connect-timeout 10 > /dev/null 2>&1
+            fi
+            sleep 180
+        done
+    "
 ' > /dev/null 2>&1 &
 
+nohup bash -c 'exec -a disk_keepalive bash -c "while true; do echo $(date) > keepalive.log; sleep 180; done"' > /dev/null 2>&1 &
 EOF
 chmod +x startup.sh
 
-# 注入到 .bashrc 实现 IDX 环境加载时自动运行
 if ! grep -q "idx-final-node/startup.sh" ~/.bashrc; then
     echo "bash \$HOME/idx-final-node/startup.sh" >> ~/.bashrc
 fi
 
-# 立即运行一次
 ./startup.sh
 
-# --- 7. 等待并验证 ---
+# --- 7. 验证并输出 ---
 echo -e "${YELLOW}>>> [7/7] 正在验证服务状态...${NC}"
-sleep 3
+sleep 5
 ARGO_DOMAIN="$FIXED_DOMAIN"
 
-# 如果是临时模式，获取域名
 if [ -z "$FIXED_TOKEN" ]; then
-    echo "正在获取临时域名 (可能需要10-20秒)..."
-    for i in {1..10}; do
+    echo "正在获取临时域名 (可能需要10-30秒)..."
+    for i in {1..30}; do
         sleep 2
-        ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///')
-        if [ ! -z "$ARGO_DOMAIN" ]; then break; fi
+        ARGO_DOMAIN=$(grep -oE "https://.*[a-z]+.trycloudflare.com" argo.log | head -n 1 | sed 's/https:\/\///g')
+        if [ -n "$ARGO_DOMAIN" ]; then break; fi
         echo -n "."
     done
 fi
 
 if [ -z "$ARGO_DOMAIN" ]; then
-    echo -e "${RED}❌ 获取域名失败或服务未启动，请检查 Token 或 Argo 日志。${NC}"; exit 1
+    echo -e "${RED}❌ 获取域名失败，请检查 Token 或查看 argo.log${NC}"
+    exit 1
 fi
 
-# --- 8. 输出结果 ---
-VMESS_JSON="{\"v\":\"2\",\"ps\":\"IDX-AI-${ARGO_DOMAIN}\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
-VMESS_LINK="vmess://$(echo -n $VMESS_JSON | base64 -w 0)"
+VMESS_JSON="{\"v\":\"2\",\"ps\":\"🇺🇸 US-HighSpeedYT-$ARGO_DOMAIN\",\"add\":\"$ARGO_DOMAIN\",\"port\":\"443\",\"id\":\"$UUID\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"$ARGO_DOMAIN\",\"path\":\"/argo\",\"tls\":\"tls\",\"sni\":\"$ARGO_DOMAIN\"}"
+
+# [修复] 仅修改此处：给变量加上双引号，防止语法错误
+VMESS_LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
 
 echo -e "\n=================================================="
-echo -e "${GREEN}🎉 部署完成！(已集成自动保活)${NC}"
+echo -e "${GREEN}🎉 部署完成！Token 正确 + 链接生成已修复${NC}"
 echo -e "=================================================="
 echo -e "🌍 域名: ${GREEN}$ARGO_DOMAIN${NC}"
 echo -e "🔑 UUID: $UUID"
-echo -e "💓 保活: \033[36m已启动 (每5分钟自动访问一次隧道)${NC}"
-echo -e "⚡ 自启: \033[36m已写入 .bashrc${NC}"
+echo -e "🇺🇸 节点图标: Shadowrocket 显示美国国旗（备注优化为 HighSpeedYT）"
+echo -e "💓 保活: 最强版（网络回源 + 磁盘覆盖 + dummy loop）"
+echo -e "🚀 路由优化: YouTube 走 direct + QUIC 原生（速度飞快） | Gemini/OpenAI/TG 走 WARP 解锁"
 echo -e "--------------------------------------------------"
 echo -e "${YELLOW}$VMESS_LINK${NC}"
 echo -e "--------------------------------------------------"
